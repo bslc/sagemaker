@@ -1,0 +1,305 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create resources for Fargate
+Parameters:
+  StackName:
+    Type: String
+    Description: Stackname
+  AwsAccountId:
+    Type: String
+    Description: AwsAccountId    
+  Region:
+    Type: String
+    Description: TargetRegion
+Mappings:
+  StackConfig:
+    VPC:
+      CIDR: 10.0.0.0/16
+    FrontendSubnet:
+      CIDR: 10.0.0.0/24
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock:
+        Fn::FindInMap:
+          - StackConfig
+          - VPC
+          - CIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub |
+            ${StackName}-VPC
+        - Key: Application
+          Value:
+            Ref: AWS::StackId
+        - Key: Network
+          Value: Public
+        - Key: Service
+          Value: !Ref StackName
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Application
+          Value:
+            Ref: AWS::StackId
+        - Key: Network
+          Value: Public
+        - Key: Service
+          Value: !Ref StackName          
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: VPC
+      InternetGatewayId:
+        Ref: InternetGateway
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    DependsOn: AttachGateway
+    Properties:
+      VpcId:
+        Ref: VPC
+      Tags:
+        - Key: Name
+          Value: !Sub |
+            ${StackName}-RTB-Public
+        - Key: Application
+          Value:
+            Ref: AWS::StackId
+        - Key: Network
+          Value: Public
+        - Key: Service
+          Value: !Ref StackName
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId:
+        Ref: PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: InternetGateway
+  FrontendSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: AttachGateway
+    Properties:
+      VpcId:
+        Ref: VPC
+      AvailabilityZone:
+        Fn::Select:
+          - "0"
+          - Fn::GetAZs:
+              Ref: AWS::Region
+      CidrBlock:
+        Fn::FindInMap:
+          - StackConfig
+          - FrontendSubnet
+          - CIDR
+      Tags:
+        - Key: Name
+          Value: !Sub |
+            ${StackName}-Sub-Public-a
+        - Key: Application
+          Value:
+            Ref: AWS::StackId
+        - Key: Network
+          Value: Public
+        - Key: Service
+          Value: !Ref StackName
+  FrontendSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: FrontendSubnet
+      RouteTableId:
+        Ref: PublicRouteTable
+  VPCDefaultSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Ref: VPC
+      GroupDescription: Do not Allow communications.
+      Tags:
+        - Key: Name
+          Value: !Sub |
+            ${StackName}-Default
+        - Key: Service
+          Value: !Ref StackName
+  EcsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${StackName}-EcsExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+  EcsTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${StackName}-EcsTaskRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+                - sagemaker.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
+  InlinePolicies: 
+    Type: "AWS::IAM::Policy"
+    Properties: 
+      PolicyName: "inline-policy"
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Action: [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:CreateLogGroup",
+        "s3:PutObject",
+        "s3:GetObject",
+        "kms:Decrypt",
+        "secretsmanager:GetSecretValue",
+        "ssm:GetParameters",
+        "ec2:AttachNetworkInterface",
+        "ec2:CreateNetworkInterface",
+        "ec2:CreateNetworkInterfacePermission",
+        "ec2:DeleteNetworkInterface",
+        "ec2:DeleteNetworkInterfacePermission",
+        "ec2:Describe*",
+        "ec2:DetachNetworkInterface",
+        "elasticloadbalancing:DeregisterInstancesFromLoadBalancer",
+        "elasticloadbalancing:DeregisterTargets",
+        "elasticloadbalancing:Describe*",
+        "elasticloadbalancing:RegisterInstancesWithLoadBalancer",
+        "elasticloadbalancing:RegisterTargets",
+        "route53:ChangeResourceRecordSets",
+        "route53:CreateHealthCheck",
+        "route53:DeleteHealthCheck",
+        "route53:Get*",
+        "route53:List*",
+        "route53:UpdateHealthCheck",
+        "servicediscovery:DeregisterInstance",
+        "servicediscovery:Get*",
+        "servicediscovery:List*",
+        "servicediscovery:RegisterInstance",
+        "servicediscovery:UpdateInstanceCustomHealthStatus"        
+      ]
+            Resource: "*"
+      Roles: 
+        - 
+          Ref: "EcsTaskRole"
+  ECSEventRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${StackName}-ECSEventRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceEventsRole
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties: 
+      ClusterName: !Sub ${StackName}-cluster
+      Tags: 
+        - Key: Name
+          Value: !Sub ${StackName}-cluster        
+  EcsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${StackName}-task-family
+      Cpu: 1024
+      Memory: 3072
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !Ref EcsExecutionRole
+      TaskRoleArn: !Ref EcsTaskRole
+      ContainerDefinitions:
+        - Name: !Sub ${StackName}
+          Command: ["python3","/usr/src/app/main.py"]
+          Cpu: 1024
+          Memory: 3072
+          Image: !Sub ${AwsAccountId}.dkr.ecr.${Region}.amazonaws.com/${StackName}:latest   
+          Environment: 
+            - Name: var1
+              Value: hogehoge
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-create-group: True
+              awslogs-region: !Sub ${Region}
+              awslogs-group: !Sub /ecs/${StackName}
+              awslogs-stream-prefix: ecs
+  TaskScheduleEvents:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "my Fargate Schedule"
+      ScheduleExpression: cron(40 15 ? * SAT *)
+      Name: !Sub ${StackName}-schedule
+      State: DISABLED
+      Targets:
+        - Arn: !GetAtt 
+            - EcsCluster
+            - Arn
+          RoleArn: !GetAtt 
+            - ECSEventRole
+            - Arn
+          Id: ID123
+          EcsParameters:
+            TaskCount: 1
+            TaskDefinitionArn: !Ref EcsTaskDefinition
+            LaunchType: FARGATE
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                AssignPublicIp: ENABLED
+                Subnets:
+                  - !Ref FrontendSubnet
+                SecurityGroups:
+                  - !Ref VPCDefaultSecurityGroup
+  ContainerRegistry:
+    Type: "AWS::ECR::Repository"
+    Properties: 
+      RepositoryName: !Sub ${StackName}
+      RepositoryPolicyText: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Sid: AllowPushPull
+            Effect: Allow
+            Principal:
+             AWS: !Sub ${AwsAccountId}
+            Action: 
+              - "ecr:GetDownloadUrlForLayer"
+              - "ecr:BatchGetImage"
+              - "ecr:BatchCheckLayerAvailability"
+              - "ecr:PutImage"
+              - "ecr:InitiateLayerUpload"
+              - "ecr:UploadLayerPart"
+              - "ecr:CompleteLayerUpload"               
